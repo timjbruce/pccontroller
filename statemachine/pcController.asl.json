@@ -1,0 +1,187 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Enable or Disable PC",
+  "States": {
+    "Enable or Disable PC": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.mode",
+          "StringEquals": "enable",
+          "Next": "Enable PC"
+        },
+        {
+          "Variable": "$.mode",
+          "StringEquals": "disable",
+          "Next": "Disabling PC"
+        }
+      ],
+      "Default": "Pass - No clear option"
+    },
+    "Disabling PC": {
+      "Type": "Pass",
+      "Next": "ListFunctions"
+    },
+    "Enable PC": {
+      "Type": "Pass",
+      "Next": "Get List of PC functions"
+    },
+    "Get List of PC functions": {
+      "Type": "Task",
+      "Parameters": {
+        "TableName": "${PCTable}"
+      },
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:scan",
+      "Next": "For Each PC record"
+    },
+    "For Each PC record": {
+      "Type": "Map",
+      "End": true,
+      "Iterator": {
+        "StartAt": "Pass - Convert String to Number",
+        "States": {
+          "Pass - Convert String to Number": {
+            "Type": "Pass",
+            "Next": "PutProvisionedConcurrencyConfig",
+            "Parameters": {
+              "PCAsNumber.$": "States.StringToJson($.provisionedConcurrency.N)",
+              "functionArn.$": "$.functionArn.S",
+              "qualifier.$": "$.alias.S"
+            }
+          },
+          "PutProvisionedConcurrencyConfig": {
+            "Type": "Task",
+            "Parameters": {
+              "FunctionName.$": "$.functionArn",
+              "ProvisionedConcurrentExecutions.$": "$.PCAsNumber",
+              "Qualifier.$": "$.qualifier"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:lambda:putProvisionedConcurrencyConfig",
+            "Next": "DynamoDB DeleteItem",
+            "ResultPath": null,
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "Next": "Pass - Could Not Set"
+              }
+            ]
+          },
+          "Pass - Could Not Set": {
+            "Type": "Pass",
+            "End": true
+          },
+          "DynamoDB DeleteItem": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:deleteItem",
+            "Parameters": {
+              "TableName": "${PCTable}",
+              "Key": {
+                "functionArn": {
+                  "S.$": "$.functionArn"
+                }
+              }
+            },
+            "End": true
+          }
+        }
+      },
+      "ItemsPath": "$.Items"
+    },
+    "ListFunctions": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:listFunctions",
+      "Parameters": {},
+      "Next": "For Each Function",
+      "ResultPath": "$.functionList"
+    },
+    "For Each Function": {
+      "Type": "Map",
+      "End": true,
+      "Iterator": {
+        "StartAt": "ListAliases",
+        "States": {
+          "ListAliases": {
+            "Type": "Task",
+            "Next": "For Each Alias",
+            "Parameters": {
+              "FunctionName.$": "$.FunctionArn"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:lambda:listAliases"
+          },
+          "For Each Alias": {
+            "Type": "Map",
+            "Iterator": {
+              "StartAt": "GetProvisionedConcurrencyConfig",
+              "States": {
+                "GetProvisionedConcurrencyConfig": {
+                  "Type": "Task",
+                  "Parameters": {
+                    "FunctionName.$": "$.AliasArn",
+                    "Qualifier.$": "$.Name"
+                  },
+                  "Resource": "arn:aws:states:::aws-sdk:lambda:getProvisionedConcurrencyConfig",
+                  "Next": "DynamoDB PutItem",
+                  "ResultPath": "$.provisionedConcurrency",
+                  "Catch": [
+                    {
+                      "ErrorEquals": [
+                        "States.NoChoiceMatched",
+                        "States.TaskFailed"
+                      ],
+                      "Comment": "no provisioned capacity",
+                      "Next": "Pass - No Provisioned Concurrency"
+                    }
+                  ]
+                },
+                "DynamoDB PutItem": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::dynamodb:putItem",
+                  "ResultPath": "$.dynamoDB",
+                  "Parameters": {
+                    "TableName": "${PCTable}",
+                    "Item": {
+                      "functionArn": {
+                        "S.$": "$.AliasArn"
+                      },
+                      "provisionedConcurrency": {
+                        "N.$": "States.Format('{}',$.provisionedConcurrency.RequestedProvisionedConcurrentExecutions)"
+                      },
+                      "alias": {
+                        "S.$": "$.Name"
+                      }
+                    }
+                  },
+                  "Next": "DeleteProvisionedConcurrencyConfig"
+                },
+                "DeleteProvisionedConcurrencyConfig": {
+                  "Type": "Task",
+                  "End": true,
+                  "Parameters": {
+                    "FunctionName.$": "$.AliasArn",
+                    "Qualifier.$": "$.Name"
+                  },
+                  "Resource": "arn:aws:states:::aws-sdk:lambda:deleteProvisionedConcurrencyConfig"
+                },
+                "Pass - No Provisioned Concurrency": {
+                  "Type": "Pass",
+                  "End": true
+                }
+              }
+            },
+            "End": true,
+            "ItemsPath": "$.Aliases",
+            "ResultPath": "$.function"
+          }
+        }
+      },
+      "ItemsPath": "$.functionList.Functions",
+      "ResultPath": "$.functionConfig"
+    },
+    "Pass - No clear option": {
+      "Type": "Pass",
+      "End": true
+    }
+  }
+}

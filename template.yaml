@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  pccontroller
+
+  Turn PC on and off on your functions via a state machine
+
+Resources:
+  PCControllerStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/pcController.asl.json
+      Type: EXPRESS
+      DefinitionSubstitutions:
+        PCTable: !Ref PCTable
+      Role: !GetAtt PCRole.Arn
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+             LogGroupArn: !GetAtt PCControllerLogGroup.Arn
+        IncludeExecutionData: True
+        Level: ALL
+        
+  PCControllerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/stepfunction/PCControllerStateMachine.Name
+      RetentionInDays: 14
+
+  PCRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      Description: Role for PC Controller
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PCControllerStatesExecutionPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                Resource: !GetAtt PCTable.Arn
+              - Effect: Allow
+                Action: 
+                  - lambda:GetProvisionedConcurrencyConfig
+                  - lambda:PutProvisionedConcurrencyConfig
+                  - lambda:DeleteProvisionedConcurrencyConfig
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:ListFunctions
+                  - lambda:ListAliases
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutLogEvents
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: 
+                  - "*"
+      
+  PCTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: functionArn
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 3
+        WriteCapacityUnits: 3
+
+Outputs:
+  PCStateMachineArn:
+    Description: "PC State machine ARN"
+    Value: !Ref PCControllerStateMachine
+  PCTable:
+    Description: "DynamoDB Table for PC state machine"
+    Value: !GetAtt PCTable.Arn
